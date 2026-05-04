@@ -1,9 +1,13 @@
+import logging
+from dataclasses import dataclass
+from typing import Callable, Optional, Type, Union
+
 from gi.repository import GLib
 from vedbus import VeDbusService
 from dbus import SystemBus
-from dataclasses import dataclass
-from typing import Callable, Optional, Union, Type
 from usb.core import USBError
+
+from .ftdi import NACK
 
 
 @dataclass
@@ -21,17 +25,18 @@ class DbusLynxDistributorService:
     def __init__(
         self,
         *,
-        service_name ,
+        service_name,
         device_instance,
         ftdi,
         config,
-        product_name = 'Lynx Distributor',
-        custom_name = 'Lynx Distributor',
+        product_name='Lynx Distributor',
+        custom_name='Lynx Distributor',
         connection='USB<->I2C',
     ):
 
         self._ftdi = ftdi
         self._config = config
+        self._reinit_pending = False
 
         self._dbusservice = VeDbusService(servicename=service_name, bus=SystemBus(private=True), register=False)
 
@@ -56,13 +61,13 @@ class DbusLynxDistributorService:
         self._dbusservice.add_path('/NrOfDistributors', 4)
 
         for distributor in ['A', 'B', 'C', 'D']:
-            self._dbusservice.add_path(f'/Distributor/{distributor}/Status', None) # <= 0=Not available, 1=Connected, 2=No bus power, 3=Communications Lost
-            self._dbusservice.add_path(f'/Distributor/{distributor}/Alarms/ConnectionLost', None) # <= 0=Ok, 2=Alarm
+            self._dbusservice.add_path(f'/Distributor/{distributor}/Status', None)  # 0=Not available, 1=Connected, 2=No bus power, 3=Communications Lost
+            self._dbusservice.add_path(f'/Distributor/{distributor}/Alarms/ConnectionLost', None)  # 0=Ok, 2=Alarm
             for fuse in range(4):
                 fuse_index = 3 - fuse if self._config_getboolean('mounted_upside_down', False) else fuse
-                self._dbusservice.add_path(f'/Distributor/{distributor}/Fuse/{fuse_index}/Name', self._config_get(f'distributor{distributor}Fuse{fuse}Name', None)) # <= UTF-8 string, limited to 16 bytes in firmware
-                self._dbusservice.add_path(f'/Distributor/{distributor}/Fuse/{fuse_index}/Status', None) # <= 0=Not available, 1=Not used, 2=Ok, 3=Blown
-                self._dbusservice.add_path(f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown', None)  # <= 0=Ok, 2=Alarm
+                self._dbusservice.add_path(f'/Distributor/{distributor}/Fuse/{fuse_index}/Name', self._config_get(f'distributor{distributor}Fuse{fuse}Name', None))  # UTF-8 string, limited to 16 bytes in firmware
+                self._dbusservice.add_path(f'/Distributor/{distributor}/Fuse/{fuse_index}/Status', None)  # 0=Not available, 1=Not used, 2=Ok, 3=Blown
+                self._dbusservice.add_path(f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown', None)
 
         self._dbusservice.register()
         self._ftdi.init_i2c()
@@ -70,16 +75,39 @@ class DbusLynxDistributorService:
         self._update()
         GLib.timeout_add(2000, self._update)
 
-    def __del__(self):
-        print('Good Bye')
-
     def _config_get(self, option, fallback):
         return self._config.get(f'ftdi:{self._ftdi.serial_number}', option, fallback=fallback)
 
     def _config_getboolean(self, option, fallback):
         return self._config.getboolean(f'ftdi:{self._ftdi.serial_number}', option, fallback=fallback)
 
+    def _invalidate_all(self):
+        """ Mark every installed distributor as Communications Lost.
+
+        Called when USB or bus-level errors prevent us from polling. We
+        deliberately keep the GLib timer running so we can recover on the
+        next tick.
+        """
+        upside_down = self._config_getboolean('mounted_upside_down', False)
+        for distributor in ['A', 'B', 'C', 'D']:
+            installed = self._config_getboolean(f'distributor{distributor}Installed', False)
+            self._dbusservice[f'/Distributor/{distributor}/Status'] = 3 if installed else 0
+            self._dbusservice[f'/Distributor/{distributor}/Alarms/ConnectionLost'] = 2 if installed else 0
+            for fuse in range(4):
+                fuse_index = 3 - fuse if upside_down else fuse
+                self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = 0
+                self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = 0
+
     def _update(self):
+        if self._reinit_pending:
+            try:
+                self._ftdi.init_i2c()
+                self._reinit_pending = False
+                logging.info("I2C controller re-initialized after USB error")
+            except USBError as e:
+                logging.warning(f"I2C re-init still failing: {e}")
+                return True
+
         try:
             for lynx in range(4):
                 distributor = chr(ord('A') + lynx)
@@ -92,6 +120,14 @@ class DbusLynxDistributorService:
                     self._dbusservice[f'/Distributor/{distributor}/Alarms/ConnectionLost'] = 2 if self._config_getboolean(f'distributor{distributor}Installed', False) else 0
                 else:
                     state = self._ftdi.read_byte_and_send_nak(address)
+
+                    # Slave ACKed the addressing but NACKed the data byte
+                    # (or returned zero bytes). Treat as not-available so we
+                    # don't crash on `state & ...` with the NACK sentinel.
+                    if state is NACK:
+                        self._dbusservice[f'/Distributor/{distributor}/Status'] = 3 if self._config_getboolean(f'distributor{distributor}Installed', False) else 0
+                        self._dbusservice[f'/Distributor/{distributor}/Alarms/ConnectionLost'] = 2 if self._config_getboolean(f'distributor{distributor}Installed', False) else 0
+                        continue
 
                     no_bus_power = (state & 0b00000010)
 
@@ -118,8 +154,11 @@ class DbusLynxDistributorService:
                                     self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = 2
                                     self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = 0
 
-        except USBError:
-            print("USB communication failed")
-            return False
+        except USBError as e:
+            logging.error(f"USB communication failed: {e}")
+            self._invalidate_all()
+            self._reinit_pending = True
+            # Keep the GLib timer alive so we can recover on the next tick.
+            return True
 
         return True
