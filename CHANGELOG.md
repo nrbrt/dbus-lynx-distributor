@@ -11,12 +11,22 @@ Earlier history lives in the upstream repository's commit log.
 
 ### Added
 
-- **Pytest test suite** — `tests/test_decoder.py` and `tests/test_ftdi.py`,
-  21 tests covering the I2C status-byte decoding (per-fuse, all-blown,
-  no-bus-power, uninstalled-fuse, plus a property-style sweep across
-  all 256 byte values × 16 install masks) and the `Ftdi` I/O wrapper's
-  contract (NACK sentinel, zero-byte-vs-NACK distinction, close
-  idempotency). Pure-Python — no Cerbo or FT232H hardware required.
+- **Pytest test suite** — 43 tests across four files:
+  - `tests/test_decoder.py` — I2C status-byte decoding (per-fuse,
+    all-blown, no-bus-power, uninstalled-fuse, property-style sweep
+    across all 256 byte values × 16 install masks).
+  - `tests/test_ftdi.py` — `Ftdi` I/O wrapper contract (NACK sentinel,
+    zero-byte-vs-NACK distinction, close idempotency).
+  - `tests/test_service.py` — service flow (`_publish_distributor`,
+    `_invalidate_all`, full `_update` cycle including the addr-NACK
+    and data-NACK paths that used to crash, USBError recovery,
+    upside-down fuse-index swap, `close()` semantics).
+  - `tests/test_main.py` — SIGTERM/SIGINT handler, `_shutdown()`
+    continuing after a service `close()` raises.
+  - `tests/conftest.py` stubs `gi`, `vedbus`, `dbus`, and
+    `settingsdevice` in `sys.modules` when those Cerbo-side libraries
+    aren't installed locally, so the whole suite runs on any
+    developer machine with `pyftdi` and `pyusb`.
 - **`dbus_lynx_distributor/decoder.py`** — dependency-free module that
   contains the pure bit-decoding logic and all status/alarm/protocol
   constants. The service module imports from here.
