@@ -1,6 +1,4 @@
 import logging
-from dataclasses import dataclass
-from typing import Callable, Optional, Type, Union
 
 from gi.repository import GLib
 from vedbus import VeDbusService
@@ -22,17 +20,6 @@ from .decoder import (
     decode_distributor_state,
 )
 from .ftdi import NACK
-
-
-@dataclass
-class ServicePath:
-    dbus_path: str
-    dbus_gettextcallback: Optional[Callable[[str, Union[int, str, float]], bool]] = None
-    dbus_initialvalue: Union[int, str, float] = None
-    dbus_writeable: bool = False
-    dbus_valuetype: Type = None
-    config_key: Optional[str] = None
-    config_invert_key: Optional[str] = None
 
 
 class DbusLynxDistributorService:

@@ -5,4 +5,4 @@ velib_python_path = Path(__file__).resolve().parent.parent / 'ext' / 'velib_pyth
 sys.path.insert(1, str(velib_python_path))
 del velib_python_path
 
-__version__ = "0.0.1"
+__version__ = "0.2.0"

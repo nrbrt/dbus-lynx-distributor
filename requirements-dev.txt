@@ -1,0 +1,4 @@
+# Dev/CI dependencies — not installed on the Cerbo at runtime.
+# Install with:  pip install -r requirements.txt -r requirements-dev.txt
+pytest~=9.0
+flake8~=7.3
