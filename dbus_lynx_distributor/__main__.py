@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 
-from gi.repository import GLib
 import logging
-from configparser import ConfigParser
 from argparse import ArgumentParser
-import _thread
+from configparser import ConfigParser
 from pathlib import Path
+
+from gi.repository import GLib
 from dbus import SystemBus
 
 from settingsdevice import SettingsDevice
 from .ftdi import Ftdi
 from .dbus_lynx_distributor_service import DbusLynxDistributorService
+
 
 class Application:
     def _parse_args(self):
@@ -43,8 +44,6 @@ class Application:
     def run(self):
         self._parse_args()
         self._read_config()
-
-        _thread.daemon = True  # allow the program to quit
 
         from dbus.mainloop.glib import DBusGMainLoop
         DBusGMainLoop(set_as_default=True)
