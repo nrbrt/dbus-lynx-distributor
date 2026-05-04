@@ -18,18 +18,8 @@ then
     opkg install python3-pip
 fi
 
-# check dependencies
-python -c "import usb"
-if [ $? -gt 0 ]
-then
-    pip3 install pyusb
-fi
-
-python -c "import pyftdi"
-if [ $? -gt 0 ]
-then
-    pip3 install pyftdi
-fi
+# Install pinned dependencies from requirements.txt.
+pip3 install -r $SCRIPT_DIR/requirements.txt
 
 mount -o remount,ro /
 

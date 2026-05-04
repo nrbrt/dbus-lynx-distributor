@@ -1,0 +1,8 @@
+# Pinned with the compatible-release operator (~=) so patch-level
+# upgrades land automatically but minor/major bumps don't break the
+# service silently at next reboot.
+#
+# Bump these intentionally and run the test suite + a hardware smoke
+# test before committing.
+pyftdi~=0.57.1
+pyusb~=1.3.1
