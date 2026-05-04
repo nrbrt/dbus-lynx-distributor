@@ -7,37 +7,21 @@ from vedbus import VeDbusService
 from dbus import SystemBus
 from usb.core import USBError
 
+from .decoder import (
+    ALARM_ACTIVE,
+    ALARM_OK,
+    CONNECTED_FALSE,
+    CONNECTED_TRUE,
+    DISTRIBUTOR_STATUS_COMMS_LOST,
+    DISTRIBUTOR_STATUS_NOT_AVAILABLE,
+    FUSE_STATUS_NOT_AVAILABLE,
+    FUSES_PER_DISTRIBUTOR,
+    LYNX_I2C_BASE_ADDR,
+    NUM_DISTRIBUTORS,
+    POLL_INTERVAL_MS,
+    decode_distributor_state,
+)
 from .ftdi import NACK
-
-
-# Distributor status values (Victron dbus convention).
-DISTRIBUTOR_STATUS_NOT_AVAILABLE = 0
-DISTRIBUTOR_STATUS_CONNECTED = 1
-DISTRIBUTOR_STATUS_NO_BUS_POWER = 2
-DISTRIBUTOR_STATUS_COMMS_LOST = 3
-
-# Fuse status values.
-FUSE_STATUS_NOT_AVAILABLE = 0
-FUSE_STATUS_NOT_USED = 1
-FUSE_STATUS_OK = 2
-FUSE_STATUS_BLOWN = 3
-
-# Alarm states (Victron dbus convention skips 1).
-ALARM_OK = 0
-ALARM_ACTIVE = 2
-
-# Connection states for /Connected dbus path.
-CONNECTED_FALSE = 0
-CONNECTED_TRUE = 1
-
-# I2C protocol constants — see README "Hardware/Background" for the byte format.
-LYNX_I2C_BASE_ADDR = 0x08          # actual address = base + jumper-set offset
-NUM_DISTRIBUTORS = 4
-FUSES_PER_DISTRIBUTOR = 4
-BIT_NO_BUS_POWER = 0b0000_0010
-BIT_FUSE0_BLOWN = 0b0001_0000      # fuse N blown bit = BIT_FUSE0_BLOWN << N
-
-POLL_INTERVAL_MS = 2000
 
 
 @dataclass
@@ -140,6 +124,18 @@ class DbusLynxDistributorService:
         self._dbusservice[f'/Distributor/{distributor}/Status'] = DISTRIBUTOR_STATUS_COMMS_LOST if installed else DISTRIBUTOR_STATUS_NOT_AVAILABLE
         self._dbusservice[f'/Distributor/{distributor}/Alarms/ConnectionLost'] = ALARM_ACTIVE if installed else ALARM_OK
 
+    def _publish_distributor(self, distributor, decoded):
+        """ Publish a decoded DistributorState on the dbus paths for one
+        distributor. Honours the mounted_upside_down flag for fuse path
+        indices (the decoder works on physical fuse 0..3 and doesn't know
+        about the dbus-path mapping). """
+        self._dbusservice[f'/Distributor/{distributor}/Status'] = decoded.status
+        self._dbusservice[f'/Distributor/{distributor}/Alarms/ConnectionLost'] = decoded.connection_lost_alarm
+        for fuse, fuse_state in enumerate(decoded.fuses):
+            fuse_index = self._fuse_index(fuse)
+            self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = fuse_state.status
+            self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = fuse_state.alarm
+
     def _invalidate_all(self):
         """ Mark every installed distributor as Communications Lost and the
         service as disconnected.
@@ -173,44 +169,24 @@ class DbusLynxDistributorService:
                 address = LYNX_I2C_BASE_ADDR + lynx
 
                 available = self._ftdi.send_addr_and_check_ack(address)
-
                 if not available:
                     self._set_distributor_lost(distributor)
                     continue
 
                 state = self._ftdi.read_byte_and_send_nak(address)
-
                 # Slave ACKed the addressing but NACKed the data byte
                 # (or returned zero bytes). Treat as Communications Lost
-                # so we don't crash on `state & ...` with the NACK sentinel.
+                # so we don't pass the NACK sentinel into the decoder.
                 if state is NACK:
                     self._set_distributor_lost(distributor)
                     continue
 
-                no_bus_power = bool(state & BIT_NO_BUS_POWER)
-
-                self._dbusservice[f'/Distributor/{distributor}/Status'] = (
-                    DISTRIBUTOR_STATUS_NO_BUS_POWER if no_bus_power else DISTRIBUTOR_STATUS_CONNECTED
+                fuse_installed = tuple(
+                    self._config_getboolean(f'distributor{distributor}Fuse{fuse}Installed', True)
+                    for fuse in range(FUSES_PER_DISTRIBUTOR)
                 )
-                self._dbusservice[f'/Distributor/{distributor}/Alarms/ConnectionLost'] = ALARM_OK
-
-                for fuse in range(FUSES_PER_DISTRIBUTOR):
-                    fuse_index = self._fuse_index(fuse)
-                    fuse_installed = self._config_getboolean(f'distributor{distributor}Fuse{fuse}Installed', True)
-                    fuse_blown = bool(state & (BIT_FUSE0_BLOWN << fuse))
-
-                    if not fuse_installed:
-                        self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = FUSE_STATUS_NOT_USED
-                        self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = ALARM_OK
-                    elif no_bus_power:
-                        self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = FUSE_STATUS_NOT_AVAILABLE
-                        self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = ALARM_OK
-                    elif fuse_blown:
-                        self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = FUSE_STATUS_BLOWN
-                        self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = ALARM_ACTIVE
-                    else:
-                        self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = FUSE_STATUS_OK
-                        self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = ALARM_OK
+                decoded = decode_distributor_state(state, fuse_installed)
+                self._publish_distributor(distributor, decoded)
 
         except USBError as e:
             logging.error(f"USB communication failed: {e}")
