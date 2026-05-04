@@ -9,6 +9,52 @@ Earlier history lives in the upstream repository's commit log.
 
 ## [Unreleased]
 
+### Added
+
+- **Pytest test suite** — `tests/test_decoder.py` and `tests/test_ftdi.py`,
+  21 tests covering the I2C status-byte decoding (per-fuse, all-blown,
+  no-bus-power, uninstalled-fuse, plus a property-style sweep across
+  all 256 byte values × 16 install masks) and the `Ftdi` I/O wrapper's
+  contract (NACK sentinel, zero-byte-vs-NACK distinction, close
+  idempotency). Pure-Python — no Cerbo or FT232H hardware required.
+- **`dbus_lynx_distributor/decoder.py`** — dependency-free module that
+  contains the pure bit-decoding logic and all status/alarm/protocol
+  constants. The service module imports from here.
+- **`requirements.txt`** with `pyftdi~=0.57.1` and `pyusb~=1.3.1` so a
+  breaking upstream release no longer silently crashes the service at
+  next reboot. `service/run` only re-runs `pip install` when
+  `requirements.txt` actually changed (md5 hashed in
+  `.requirements.installed`).
+- **Graceful shutdown** via `GLib.unix_signal_add` for SIGTERM/SIGINT.
+  `DbusLynxDistributorService.close()` cancels the GLib poll timer and
+  calls `Ftdi.close()` which terminates the pyftdi I2C controller.
+  `Ftdi.close()` is idempotent and safe when `init_i2c()` never ran.
+- Named constants in place of magic numbers: `DISTRIBUTOR_STATUS_*`,
+  `FUSE_STATUS_*`, `ALARM_*`, `CONNECTED_*`, `LYNX_I2C_BASE_ADDR`,
+  `BIT_NO_BUS_POWER`, `BIT_FUSE0_BLOWN`, `NUM_DISTRIBUTORS`,
+  `FUSES_PER_DISTRIBUTOR`, `POLL_INTERVAL_MS`.
+
+### Changed
+
+- `/Connected` is now actively maintained: flipped to `0` on
+  USBError-induced invalidation, restored to `1` on successful
+  re-init or the next successful poll. Previously hard-coded to `1`
+  at construction and never updated, so it lied during outages.
+- `_update()` now delegates the byte-decoding to `decode_distributor_state()`
+  and only handles the dbus publishing. The nested if/else from the
+  upstream code is gone.
+
+### Removed
+
+- Dead code: `_thread.daemon = True` from `__main__.py`. `_thread` is
+  the low-level threading API and the main thread cannot be a daemon
+  thread by definition. The "allow the program to quit" comment was
+  misleading; SIGTERM handling now does the actual work.
+- Runtime daemontools state (`service/supervise/{lock,status}`,
+  `service/log/supervise/{lock,status}`) removed from git tracking and
+  added to `.gitignore` alongside `.pytest_cache/` and
+  `.requirements.installed`.
+
 ### Fixed
 
 - **VID/PID variable assignment and config field names were swapped.**
