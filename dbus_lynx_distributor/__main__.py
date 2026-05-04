@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import logging
+import signal
 from argparse import ArgumentParser
 from configparser import ConfigParser
 from pathlib import Path
@@ -14,6 +15,9 @@ from .dbus_lynx_distributor_service import DbusLynxDistributorService
 
 
 class Application:
+    def __init__(self):
+        self._services = []
+        self._mainloop = None
     def _parse_args(self):
         from . import __version__
 
@@ -63,15 +67,38 @@ class Application:
             service, device_instance = self._get_class_and_vrm_instance(serial_number=ftdi.serial_number, service='battery')
             service_name = f'com.victronenergy.{service}.dbus_lynx_distributor_{ftdi.serial_number}'
 
-            DbusLynxDistributorService(
+            self._services.append(DbusLynxDistributorService(
                 service_name=service_name,
                 device_instance=device_instance,
                 ftdi=ftdi,
-                config=self._config
-                )
+                config=self._config,
+            ))
 
-        mainloop = GLib.MainLoop()
-        mainloop.run()
+        self._mainloop = GLib.MainLoop()
+        # Translate SIGTERM/SIGINT into a clean mainloop.quit() so the
+        # cleanup path runs (i2c.terminate(), timer cancellation) instead
+        # of the process being killed mid-I2C-transaction.
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, self._on_signal, signal.SIGTERM)
+        GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, self._on_signal, signal.SIGINT)
+
+        try:
+            self._mainloop.run()
+        finally:
+            self._shutdown()
+
+    def _on_signal(self, signum):
+        logging.info(f"Received signal {signum}, shutting down")
+        if self._mainloop is not None:
+            self._mainloop.quit()
+        return False  # remove handler
+
+    def _shutdown(self):
+        for svc in self._services:
+            try:
+                svc.close()
+            except Exception as e:  # noqa: BLE001 — best-effort cleanup
+                logging.warning(f"Error closing service during shutdown: {e}")
+        self._services.clear()
 
 if __name__ == "__main__":
     Application().run()

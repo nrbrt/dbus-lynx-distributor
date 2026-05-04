@@ -63,3 +63,12 @@ class Ftdi:
             return True
         except I2cNackError:
             return False
+
+    def close(self):
+        """ Release the underlying pyftdi I2C controller. Safe to call
+        repeatedly; safe to call when init_i2c() never ran. """
+        if self.i2c is not None:
+            try:
+                self.i2c.terminate()
+            finally:
+                self.i2c = None

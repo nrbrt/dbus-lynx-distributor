@@ -67,6 +67,7 @@ class DbusLynxDistributorService:
         self._ftdi = ftdi
         self._config = config
         self._reinit_pending = False
+        self._timer_id = None
 
         self._dbusservice = VeDbusService(servicename=service_name, bus=SystemBus(private=True), register=False)
 
@@ -103,7 +104,22 @@ class DbusLynxDistributorService:
         self._ftdi.init_i2c()
 
         self._update()
-        GLib.timeout_add(POLL_INTERVAL_MS, self._update)
+        self._timer_id = GLib.timeout_add(POLL_INTERVAL_MS, self._update)
+
+    def close(self):
+        """ Release the I2C controller and cancel the poll timer.
+
+        Safe to call multiple times. Called from the main process's
+        SIGTERM/SIGINT handler so a systemctl restart doesn't leave a
+        stuck FTDI handle or a half-finished I2C transaction.
+        """
+        if self._timer_id is not None:
+            GLib.source_remove(self._timer_id)
+            self._timer_id = None
+        try:
+            self._ftdi.close()
+        except Exception as e:  # noqa: BLE001 — last-ditch cleanup
+            logging.warning(f"Error closing Ftdi during shutdown: {e}")
 
     def _config_get(self, option, fallback):
         return self._config.get(f'ftdi:{self._ftdi.serial_number}', option, fallback=fallback)
