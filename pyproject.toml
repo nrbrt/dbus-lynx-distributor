@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dbus-lynx-distributor"
+# Keep in sync with dbus_lynx_distributor/__init__.py:__version__
+version = "0.2.0"
+description = "Venus OS plugin to read out a Victron Lynx Distributor over I2C without a Lynx Smart BMS"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [
+    { name = "twam (upstream)" },
+    { name = "Norbert Klaus", email = "norklaus@gmail.com" },
+]
+keywords = ["victron", "venus-os", "lynx-distributor", "i2c", "ftdi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Home Automation",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "pyftdi~=0.57.1",
+    "pyusb~=1.3.1",
+    # gi (PyGObject) and dbus-python are provided by the Venus OS image and
+    # are NOT pip-installable in a normal venv without system packages, so
+    # they're not declared here. On a developer machine, `gi` and `vedbus`
+    # are stubbed by tests/conftest.py.
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest~=9.0",
+    "flake8~=7.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/nrbrt/dbus-lynx-distributor"
+"Upstream" = "https://github.com/twam/dbus-lynx-distributor"
+Changelog = "https://github.com/nrbrt/dbus-lynx-distributor/blob/master/CHANGELOG.md"
+
+[project.scripts]
+# Allows `pip install -e .` followed by `dbus-lynx-distributor -c config.ini -v`
+# on a developer machine. The Cerbo continues to use `python -m dbus_lynx_distributor`
+# from service/run, since that doesn't require an install step.
+dbus-lynx-distributor = "dbus_lynx_distributor.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["dbus_lynx_distributor*"]
+exclude = ["tests*", "ext*", "service*", "doc*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"

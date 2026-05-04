@@ -9,6 +9,22 @@ A Venus OS 'plugin' to read out Victron's [Lynx Distributor](https://www.victron
 
 This plugin comes without any guarantees or warranties. Use it at your own risk. I only tested it on my hardware setup.
 
+## Development
+
+The repository is a standard PEP 621 Python project. To set up a dev environment:
+
+```bash
+git clone --recurse-submodules https://github.com/nrbrt/dbus-lynx-distributor.git
+cd dbus-lynx-distributor
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+pytest
+```
+
+`pip install -e '.[dev]'` installs `pyftdi` and `pyusb` from `requirements.txt` plus `pytest`/`flake8` from the `dev` extra. The Cerbo-side libraries (`gi`, `vedbus`, `dbus`, `settingsdevice`) are stubbed in `tests/conftest.py` so the test suite runs on any developer machine.
+
+CI (`.github/workflows/test.yml`) runs the same suite on every push and PR against Python 3.11 and 3.12.
+
 ## Hardware
 
 ### Background

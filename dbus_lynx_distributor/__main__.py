@@ -5,6 +5,7 @@ import signal
 from argparse import ArgumentParser
 from configparser import ConfigParser
 from pathlib import Path
+from typing import List, Optional
 
 from gi.repository import GLib
 from dbus import SystemBus
@@ -15,10 +16,11 @@ from .dbus_lynx_distributor_service import DbusLynxDistributorService
 
 
 class Application:
-    def __init__(self):
-        self._services = []
-        self._mainloop = None
-    def _parse_args(self):
+    def __init__(self) -> None:
+        self._services: List[DbusLynxDistributorService] = []
+        self._mainloop: Optional[GLib.MainLoop] = None
+
+    def _parse_args(self) -> None:
         from . import __version__
 
         parser = ArgumentParser()
@@ -31,12 +33,12 @@ class Application:
 
         logging.basicConfig(format="%(asctime)s %(levelname)-7s %(name)-10s %(message)s", level=max(3 - self._args.verbose_count, 0) * 10)
 
-    def _read_config(self):
+    def _read_config(self) -> None:
         self._config = ConfigParser()
         self._config.read(self._args.config)
 
     @staticmethod
-    def _get_class_and_vrm_instance(*, serial_number: str, service: str):
+    def _get_class_and_vrm_instance(*, serial_number: str, service: str) -> List[str]:
         settings = SettingsDevice(
             bus=SystemBus(),
             supportedSettings={'ClassAndVrmInstance': [f'/Settings/Devices/dbus_lynx_distributor_{serial_number}/ClassAndVrmInstance', f'{service}:1', 0, 0],},
@@ -45,7 +47,7 @@ class Application:
 
         return settings['ClassAndVrmInstance'].split(':', 2)
 
-    def run(self):
+    def run(self) -> None:
         self._parse_args()
         self._read_config()
 
@@ -69,7 +71,7 @@ class Application:
 
             self._services.append(DbusLynxDistributorService(
                 service_name=service_name,
-                device_instance=device_instance,
+                device_instance=int(device_instance),
                 ftdi=ftdi,
                 config=self._config,
             ))
@@ -86,13 +88,13 @@ class Application:
         finally:
             self._shutdown()
 
-    def _on_signal(self, signum):
+    def _on_signal(self, signum: int) -> bool:
         logging.info(f"Received signal {signum}, shutting down")
         if self._mainloop is not None:
             self._mainloop.quit()
-        return False  # remove handler
+        return False  # returning False removes the GLib signal handler
 
-    def _shutdown(self):
+    def _shutdown(self) -> None:
         for svc in self._services:
             try:
                 svc.close()
@@ -100,5 +102,12 @@ class Application:
                 logging.warning(f"Error closing service during shutdown: {e}")
         self._services.clear()
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """ Entry point for the ``dbus-lynx-distributor`` console script
+    declared in pyproject.toml. """
     Application().run()
+
+
+if __name__ == "__main__":
+    main()

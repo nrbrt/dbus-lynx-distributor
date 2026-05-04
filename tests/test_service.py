@@ -9,8 +9,6 @@ self._dbusservice so we can assert which paths the service writes to.
 from configparser import ConfigParser
 from unittest.mock import MagicMock
 
-import pytest
-
 from dbus_lynx_distributor.dbus_lynx_distributor_service import DbusLynxDistributorService
 from dbus_lynx_distributor.decoder import (
     ALARM_ACTIVE,

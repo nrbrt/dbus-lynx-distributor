@@ -1,4 +1,6 @@
 import logging
+from configparser import ConfigParser
+from typing import Optional
 
 from gi.repository import GLib
 from vedbus import VeDbusService
@@ -17,28 +19,29 @@ from .decoder import (
     LYNX_I2C_BASE_ADDR,
     NUM_DISTRIBUTORS,
     POLL_INTERVAL_MS,
+    DistributorState,
     decode_distributor_state,
 )
-from .ftdi import NACK
+from .ftdi import NACK, Ftdi
 
 
 class DbusLynxDistributorService:
     def __init__(
         self,
         *,
-        service_name,
-        device_instance,
-        ftdi,
-        config,
-        product_name='Lynx Distributor',
-        custom_name='Lynx Distributor',
-        connection='USB<->I2C',
-    ):
+        service_name: str,
+        device_instance: int,
+        ftdi: Ftdi,
+        config: ConfigParser,
+        product_name: str = 'Lynx Distributor',
+        custom_name: str = 'Lynx Distributor',
+        connection: str = 'USB<->I2C',
+    ) -> None:
 
         self._ftdi = ftdi
         self._config = config
-        self._reinit_pending = False
-        self._timer_id = None
+        self._reinit_pending: bool = False
+        self._timer_id: Optional[int] = None
 
         self._dbusservice = VeDbusService(servicename=service_name, bus=SystemBus(private=True), register=False)
 
@@ -77,7 +80,7 @@ class DbusLynxDistributorService:
         self._update()
         self._timer_id = GLib.timeout_add(POLL_INTERVAL_MS, self._update)
 
-    def close(self):
+    def close(self) -> None:
         """ Release the I2C controller and cancel the poll timer.
 
         Safe to call multiple times. Called from the main process's
@@ -92,18 +95,18 @@ class DbusLynxDistributorService:
         except Exception as e:  # noqa: BLE001 — last-ditch cleanup
             logging.warning(f"Error closing Ftdi during shutdown: {e}")
 
-    def _config_get(self, option, fallback):
+    def _config_get(self, option: str, fallback):
         return self._config.get(f'ftdi:{self._ftdi.serial_number}', option, fallback=fallback)
 
-    def _config_getboolean(self, option, fallback):
+    def _config_getboolean(self, option: str, fallback: bool) -> bool:
         return self._config.getboolean(f'ftdi:{self._ftdi.serial_number}', option, fallback=fallback)
 
-    def _fuse_index(self, fuse):
+    def _fuse_index(self, fuse: int) -> int:
         """ Translate a 0..3 fuse number to the dbus path index, honouring
         the mounted_upside_down config flag. """
         return (FUSES_PER_DISTRIBUTOR - 1) - fuse if self._config_getboolean('mounted_upside_down', False) else fuse
 
-    def _set_distributor_lost(self, distributor):
+    def _set_distributor_lost(self, distributor: str) -> None:
         """ Mark a single distributor as Communications Lost (or Not
         Available if it isn't installed). Used by both the global
         invalidate-all path and the per-address fallback in _update. """
@@ -111,7 +114,7 @@ class DbusLynxDistributorService:
         self._dbusservice[f'/Distributor/{distributor}/Status'] = DISTRIBUTOR_STATUS_COMMS_LOST if installed else DISTRIBUTOR_STATUS_NOT_AVAILABLE
         self._dbusservice[f'/Distributor/{distributor}/Alarms/ConnectionLost'] = ALARM_ACTIVE if installed else ALARM_OK
 
-    def _publish_distributor(self, distributor, decoded):
+    def _publish_distributor(self, distributor: str, decoded: DistributorState) -> None:
         """ Publish a decoded DistributorState on the dbus paths for one
         distributor. Honours the mounted_upside_down flag for fuse path
         indices (the decoder works on physical fuse 0..3 and doesn't know
@@ -123,7 +126,7 @@ class DbusLynxDistributorService:
             self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = fuse_state.status
             self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = fuse_state.alarm
 
-    def _invalidate_all(self):
+    def _invalidate_all(self) -> None:
         """ Mark every installed distributor as Communications Lost and the
         service as disconnected.
 
@@ -139,7 +142,10 @@ class DbusLynxDistributorService:
                 self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Status'] = FUSE_STATUS_NOT_AVAILABLE
                 self._dbusservice[f'/Distributor/{distributor}/Fuse/{fuse_index}/Alarms/Blown'] = ALARM_OK
 
-    def _update(self):
+    def _update(self) -> bool:
+        # GLib timer convention: return True keeps the timer alive, False
+        # removes it permanently. We always return True here — even on
+        # error — because the recovery path needs the next tick to fire.
         if self._reinit_pending:
             try:
                 self._ftdi.init_i2c()

@@ -11,6 +11,21 @@ Earlier history lives in the upstream repository's commit log.
 
 ### Added
 
+- **`pyproject.toml`** (PEP 621) with full project metadata: name,
+  version, description, authors, license, classifiers, deps, optional
+  `dev` extras (pytest, flake8), URLs, and a `dbus-lynx-distributor`
+  console-script entry point. Pytest configuration moved here from
+  the standalone `pytest.ini`. The Cerbo continues to launch via
+  `python -m dbus_lynx_distributor` (no install step needed); on a
+  developer machine `pip install -e '.[dev]'` gives you the script
+  on PATH plus all test deps.
+- **Type hints** on every public method of `Ftdi`,
+  `DbusLynxDistributorService`, and `Application` (parameters and
+  return types). The decoder module already had type hints from the
+  start. Lets editors and mypy/pyright catch wiring mistakes that the
+  test suite can't.
+- README "Development" section explaining the venv + install + test
+  loop.
 - **GitHub Actions workflow** (`.github/workflows/test.yml`) running
   `flake8 --select=E9,F` plus the full `pytest` suite on every push to
   master and every PR, against Python 3.11 and 3.12. Pulls deps from
@@ -82,6 +97,8 @@ Earlier history lives in the upstream repository's commit log.
 - `ServicePath` dataclass in `dbus_lynx_distributor_service.py` —
   defined but never used anywhere in the codebase. Likely an
   abandoned-refactor artifact from upstream.
+- Standalone `pytest.ini` removed; configuration consolidated under
+  `[tool.pytest.ini_options]` in `pyproject.toml`.
 - Dead code: `_thread.daemon = True` from `__main__.py`. `_thread` is
   the low-level threading API and the main thread cannot be a daemon
   thread by definition. The "allow the program to quit" comment was
