@@ -49,10 +49,10 @@ class Application:
         from dbus.mainloop.glib import DBusGMainLoop
         DBusGMainLoop(set_as_default=True)
 
-        pid = int(self._config.get(section='general', option='vid', fallback='0x0403'), 0)
-        vid = int(self._config.get(section='general', option='pid', fallback='0xD4F8'), 0)
+        vid = int(self._config.get(section='general', option='vid', fallback='0x0403'), 0)
+        pid = int(self._config.get(section='general', option='pid', fallback='0xD4F8'), 0)
 
-        ftdis = Ftdi.scan(pid=pid, vid=vid)
+        ftdis = Ftdi.scan(vid=vid, pid=pid)
 
         if len(ftdis) == 0:
             logging.warning("No devices found.")
