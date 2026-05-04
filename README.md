@@ -3,6 +3,8 @@ dbus-lynx-distributor
 
 A Venus OS 'plugin' to read out Victron's [Lynx Distributor](https://www.victronenergy.de/dc-distribution-systems/lynx-distributor) without a [Lynx Smart BMS](https://www.victronenergy.de/battery-management-systems/lynx-smart-bms). It requires a custom adapter hardware (see below) and emulates a battery (without SoC, ...) on DBUS just providing the distributor information.
 
+> **About this fork:** this is a maintenance fork of [twam/dbus-lynx-distributor](https://github.com/twam/dbus-lynx-distributor) with reliability fixes (recovery from transient USB errors, swapped VID/PID identifiers, etc.). See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
+
 *Disclaimer*
 
 This plugin comes without any guarantees or warranties. Use it at your own risk. I only tested it on my hardware setup.
