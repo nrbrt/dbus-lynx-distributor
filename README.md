@@ -3,11 +3,53 @@ dbus-lynx-distributor
 
 A Venus OS 'plugin' to read out Victron's [Lynx Distributor](https://www.victronenergy.de/dc-distribution-systems/lynx-distributor) without a [Lynx Smart BMS](https://www.victronenergy.de/battery-management-systems/lynx-smart-bms). It requires a custom adapter hardware (see below) and emulates a battery (without SoC, ...) on DBUS just providing the distributor information.
 
-> **About this fork:** this is a maintenance fork of [twam/dbus-lynx-distributor](https://github.com/twam/dbus-lynx-distributor) with reliability fixes (recovery from transient USB errors, swapped VID/PID identifiers, etc.). See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
-
 *Disclaimer*
 
 This plugin comes without any guarantees or warranties. Use it at your own risk. I only tested it on my hardware setup.
+
+---
+
+## How this fork differs from upstream
+
+This is a substantively reworked fork of [twam/dbus-lynx-distributor](https://github.com/twam/dbus-lynx-distributor). Beyond the original feature set it adds bug fixes, runtime resilience, packaging, CI, and a real test suite. The full list lives in [`CHANGELOG.md`](CHANGELOG.md); the highlights:
+
+### ⚠️ Breaking change (config field names)
+
+The upstream `config.sample.ini` had the `vid` and `pid` field names swapped against their values:
+
+```ini
+# upstream — field names are inverted
+pid = 0x0403   # actually the FTDI vendor ID
+vid = 0xD4F8   # actually the Victron product ID
+```
+
+This fork fixes both the field names *and* the corresponding variable assignment in `__main__.py`. The two upstream errors cancelled out, so unmodified upstream installs accidentally worked. **Configurations that were copied from upstream verbatim continue to work without changes** because the values stayed the same — only the names were corrected. Configurations that were intentionally written against the *meaning* of the field names (rare) need the `vid` and `pid` lines swapped.
+
+### Reliability fixes (the reason this fork exists)
+
+- **Transient USB errors no longer kill the service permanently.** Upstream's `_update()` returned `False` from its `except USBError` branch, which causes `GLib.timeout_add` to drop the poll timer for good. A single cable jiggle, EMI burst, or bus glitch would freeze the dbus values until the service was manually restarted. This fork invalidates the affected distributors as Communications Lost, sets a re-init flag, and recovers on the next tick by calling `Ftdi.init_i2c()` again.
+- **NACK on a data byte no longer crashes with `TypeError`.** Upstream did `state & 0b00000010` directly on the return of `read_byte_and_send_nak()`. If the slave ACKed the address byte but NACKed the data byte (a real race under EMI), the return was `None` and the bitwise AND raised — and the surrounding `except USBError` did *not* catch it, so the GLib timer died with an uncaught exception. This fork introduces a `NACK` sentinel that the call site handles explicitly as Communications Lost.
+- **`/Connected` is now actively maintained.** Upstream hard-coded it to `1` at construction and never updated it, so it stayed `1` even during USB outages. This fork flips it to `0` on invalidation and back to `1` on successful poll.
+- **I²C retry count raised from 1 to 3** so transient bus glitches recover before propagating to the caller (~10 ms per retry).
+- **Graceful shutdown on SIGTERM/SIGINT** via `GLib.unix_signal_add` so `systemctl restart` no longer leaves a stuck FTDI handle or a half-finished I²C transaction.
+
+### Quality improvements
+
+- **43-test pytest suite** (`tests/`) with mocked pyftdi I/O, including regression tests for both reliability bugs above and a property-style sweep across all 256 status-byte values. Runs in under 0.2 s on a Pi 5; doesn't require Cerbo libraries thanks to `tests/conftest.py` stubs.
+- **GitHub Actions CI** (`.github/workflows/test.yml`) running flake8 + pytest on Python 3.11 and 3.12 for every push and PR.
+- **Pinned dependencies** (`requirements.txt`: `pyftdi~=0.57.1`, `pyusb~=1.3.1`). The upstream service script ran `pip install pyftdi` with no version constraint, so a breaking upstream release would have crashed the service silently at next reboot.
+- **Pure decoder module** (`dbus_lynx_distributor/decoder.py`) — bit-decoding logic extracted from the dbus-publishing layer for testability and clarity. The 4-level-nested if/else from upstream is gone.
+- **Type hints** on every public method of `Ftdi`, `DbusLynxDistributorService`, and `Application`.
+- **PEP 621 packaging** (`pyproject.toml`) with a `dbus-lynx-distributor` console-script entry point. Local dev install via `pip install -e '.[dev]'`.
+- **Dead code removed**: `_thread.daemon = True` (no-op), debug `__del__` print, and the unused `ServicePath` dataclass.
+
+### What did NOT change
+
+- The hardware adapter, wiring, and the I²C status-byte protocol described below — the entire "Hardware" section of this README is unchanged from upstream and reflects current behaviour.
+- The Venus OS / Cerbo install procedure (`bash install.sh` from `/data/dbus-lynx-distributor`).
+- The dbus path layout and the values published on each path.
+
+---
 
 ## Development
 
