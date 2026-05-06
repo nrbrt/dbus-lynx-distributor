@@ -128,6 +128,21 @@ See above.
 Adafruit offers a [FT232H Breakout](https://www.adafruit.com/product/2264), which also works fine. I used the 3.3V supply (and not the 5V) as with the 5V the Lynx Distributors didn't answer I2C requests. The breakout always pull SCL/SDA to only 3.3V which might be not enough for the Lynx Distributor if running at 5V.
 
 
+### Optional: BME280 environmental sensor
+
+The FT232H breakout's I²C bus has plenty of room for additional slaves alongside the Lynx Distributors (which live at addresses 0x08-0x17). One handy option is a Bosch BME280 — a single chip that reports temperature, relative humidity and barometric pressure, with default I²C address 0x76 (or 0x77 if the SDO pin is jumpered high).
+
+Wiring on an Adafruit FT232H breakout:
+
+| FT232H pin | BME280 module pin |
+|---|---|
+| 3V3 | VIN/VCC |
+| GND | GND |
+| D0 (SCK) | SCL |
+| D1 (SDA) ⊕ D2 (SDA) tied together | SDA |
+
+The driver auto-probes 0x76 then 0x77 by default; no config required if the sensor is present. When detected it registers a separate `com.victronenergy.temperature.<serial>_bme280` service so it shows up as a sensor tile in the Venus OS GUI.
+
 ## Software
 
 To be able to use I²C with the FT232H chip its MPSSE mode must be used. There are plenty of options to use this mode (FTDI's official drivers, libftdi, pyftdi), but all of them required custom drivers, ... to be compiled/installed on Venus OS which are not premade available.
@@ -145,3 +160,14 @@ You might also need to install the `python3-modules` package by `mount -o remoun
 ### Configuration
 
 Rename `config.sample.ini` and change to needs.
+
+#### BME280 sensor (optional)
+
+If you wired a BME280 onto the same I²C bus, it is detected automatically. To override behaviour add to the `[ftdi:<serial>]` section:
+
+```ini
+bme280 = auto         ; 'auto' (default), '0x76', '0x77', or 'disabled'
+bme280Name = Boot     ; optional CustomName shown in the GUI
+```
+
+`disabled` skips probing entirely (no logged "not found" messages); explicit `0x76`/`0x77` only probes that one address.

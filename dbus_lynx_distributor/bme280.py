@@ -196,6 +196,60 @@ def compensate_humidity(adc_H: int, cal: Bme280Calibration, t_fine: int) -> floa
     return (v >> 12) / 1024.0
 
 
+# ---- Detection / config ---------------------------------------------------
+
+def parse_address_config(value: str) -> Optional[Tuple[int, ...]]:
+    """ Parse the [bme280] address config option into a list of I2C addresses
+    to probe.
+
+    Values:
+        'disabled' / '' / 'off' / 'no' / 'false' → None  (skip BME280 entirely)
+        'auto' (default)                         → (0x76, 0x77)
+        '0x76' / '0x77' / '118' / '119'           → single-address tuple
+
+    Raises ValueError on unparseable input.
+    """
+    if value is None:
+        return (BME280_DEFAULT_ADDRESS, BME280_ALT_ADDRESS)
+    v = value.strip().lower()
+    if v in ("disabled", "", "off", "no", "false"):
+        return None
+    if v == "auto":
+        return (BME280_DEFAULT_ADDRESS, BME280_ALT_ADDRESS)
+    addr = int(v, 0)
+    if not (0x03 <= addr <= 0x77):
+        raise ValueError(f"BME280 I2C address out of range: {value!r}")
+    return (addr,)
+
+
+def detect_bme280(i2c_controller, configured: str = "auto") -> Optional["Bme280Reader"]:
+    """ Probe configured/auto address(es); return an initialised reader or None.
+
+    `i2c_controller` is a pyftdi I2cController already opened on the FT232H.
+    The Lynx service shares this controller, so we ask it for a port at each
+    candidate address. First one whose chip-ID matches BME280_CHIP_ID wins.
+    """
+    candidates = parse_address_config(configured)
+    if candidates is None:
+        log.info("BME280 detection disabled by config")
+        return None
+
+    for addr in candidates:
+        try:
+            port = i2c_controller.get_port(addr)
+        except Exception as e:                   # pyftdi raises on bad addr
+            log.debug("Could not get I2C port 0x%02x: %s", addr, e)
+            continue
+        reader = Bme280Reader(port, address=addr)
+        if reader.probe():
+            log.info("BME280 detected at I2C address 0x%02x", addr)
+            reader.initialize()
+            return reader
+
+    log.info("No BME280 found (probed: %s)", ", ".join(f"0x{a:02x}" for a in candidates))
+    return None
+
+
 # ---- Hardware reader ------------------------------------------------------
 
 class Bme280Reader:

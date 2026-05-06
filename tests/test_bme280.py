@@ -180,3 +180,126 @@ def test_bme280_reading_dataclass():
     assert r.temperature_c == 21.5
     assert r.humidity_percent == 55.0
     assert r.pressure_hpa == 1013.25
+
+
+# ---- Address-config parsing ----
+
+from dbus_lynx_distributor.bme280 import parse_address_config
+
+
+def test_parse_address_config_auto():
+    assert parse_address_config("auto") == (0x76, 0x77)
+
+
+def test_parse_address_config_default_is_auto():
+    """None and empty config map to auto so users without the section work."""
+    assert parse_address_config(None) == (0x76, 0x77)
+
+
+def test_parse_address_config_disabled():
+    for v in ("disabled", "off", "no", "false", ""):
+        assert parse_address_config(v) is None, f"{v!r} should disable"
+
+
+def test_parse_address_config_explicit_hex():
+    assert parse_address_config("0x76") == (0x76,)
+    assert parse_address_config("0x77") == (0x77,)
+
+
+def test_parse_address_config_explicit_decimal():
+    assert parse_address_config("118") == (0x76,)
+    assert parse_address_config("119") == (0x77,)
+
+
+def test_parse_address_config_case_insensitive():
+    assert parse_address_config("AUTO") == (0x76, 0x77)
+    assert parse_address_config("Disabled") is None
+
+
+def test_parse_address_config_out_of_range():
+    with pytest.raises(ValueError):
+        parse_address_config("0x80")          # too high
+    with pytest.raises(ValueError):
+        parse_address_config("0x00")          # too low
+
+
+# ---- detect_bme280 ----
+
+from dbus_lynx_distributor.bme280 import BME280_CHIP_ID, detect_bme280
+
+
+class _FakePort:
+    """Minimal pyftdi I2cPort stand-in for detection tests."""
+    def __init__(self, address, chip_id_value):
+        self.address = address
+        self._chip_id_value = chip_id_value
+        self._calib_88 = bytes(26)            # zeros — initialize() reads this
+        self._calib_e1 = bytes(7)
+        self._writes = []
+
+    def read_from(self, reg, length):
+        if reg == 0xD0:
+            return bytes([self._chip_id_value])
+        if reg == 0x88:
+            return self._calib_88
+        if reg == 0xE1:
+            return self._calib_e1
+        return bytes(length)
+
+    def write_to(self, reg, data):
+        self._writes.append((reg, data))
+
+
+class _FakeI2cController:
+    def __init__(self, ports_by_addr):
+        self._ports = ports_by_addr
+
+    def get_port(self, address):
+        if address not in self._ports:
+            raise ValueError(f"no port at 0x{address:02x}")
+        return self._ports[address]
+
+
+def test_detect_bme280_finds_default_address():
+    ctrl = _FakeI2cController({
+        0x76: _FakePort(0x76, BME280_CHIP_ID),
+        0x77: _FakePort(0x77, 0xFF),                      # not BME280
+    })
+    reader = detect_bme280(ctrl, "auto")
+    assert reader is not None
+    assert reader.address == 0x76
+
+
+def test_detect_bme280_falls_through_to_alt_address():
+    ctrl = _FakeI2cController({
+        0x76: _FakePort(0x76, 0xFF),                      # not BME280
+        0x77: _FakePort(0x77, BME280_CHIP_ID),
+    })
+    reader = detect_bme280(ctrl, "auto")
+    assert reader is not None
+    assert reader.address == 0x77
+
+
+def test_detect_bme280_returns_none_when_disabled():
+    ctrl = _FakeI2cController({
+        0x76: _FakePort(0x76, BME280_CHIP_ID),
+    })
+    assert detect_bme280(ctrl, "disabled") is None
+
+
+def test_detect_bme280_returns_none_when_chip_absent():
+    ctrl = _FakeI2cController({
+        0x76: _FakePort(0x76, 0xFF),
+        0x77: _FakePort(0x77, 0xFF),
+    })
+    assert detect_bme280(ctrl, "auto") is None
+
+
+def test_detect_bme280_explicit_address_only_probes_that_one():
+    """User pinned 0x77 → don't even look at 0x76 (avoids spurious matches)."""
+    ctrl = _FakeI2cController({
+        0x76: _FakePort(0x76, BME280_CHIP_ID),            # would match if probed
+        0x77: _FakePort(0x77, 0xFF),
+    })
+    reader = detect_bme280(ctrl, "0x77")
+    assert reader is None                                  # 0x77 didn't match, 0x76 not probed
