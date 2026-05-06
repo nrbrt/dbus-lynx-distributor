@@ -56,6 +56,8 @@ def _make_service(*, mounted_upside_down=False, fuses_installed=None):
     svc._dbusservice = FakeDbusService()
     svc._reinit_pending = False
     svc._timer_id = None
+    svc._bme280_reader = None     # No BME280 in unit-test fixture
+    svc._bme280_dbus = None
 
     # Initial dbus paths the real __init__ would have created.
     for distributor in 'ABCD':
