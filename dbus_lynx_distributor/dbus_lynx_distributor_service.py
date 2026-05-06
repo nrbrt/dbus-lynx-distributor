@@ -27,6 +27,15 @@ from .ftdi import NACK, Ftdi
 
 
 class DbusLynxDistributorService:
+    # Class-level defaults so test fixtures that build the service via
+    # `__new__()` (skipping __init__) don't have to seed every optional
+    # attribute themselves. __init__ overrides these with instance-level
+    # values; callers that bypass __init__ inherit safe Nones.
+    _reinit_pending: bool = False
+    _timer_id: Optional[int] = None
+    _bme280_reader: "Optional[Bme280Reader]" = None
+    _bme280_dbus: "Optional[VeDbusService]" = None
+
     def __init__(
         self,
         *,
@@ -41,8 +50,6 @@ class DbusLynxDistributorService:
 
         self._ftdi = ftdi
         self._config = config
-        self._reinit_pending: bool = False
-        self._timer_id: Optional[int] = None
 
         self._dbusservice = VeDbusService(servicename=service_name, bus=SystemBus(private=True), register=False)
 
@@ -80,8 +87,7 @@ class DbusLynxDistributorService:
 
         # Optional BME280 environmental sensor on the same I2C bus.
         # Address conflict with Lynx (0x08-0x17) is impossible — BME280 lives at 0x76/0x77.
-        self._bme280_reader: Optional[Bme280Reader] = None
-        self._bme280_dbus: Optional[VeDbusService] = None
+        # (_bme280_reader and _bme280_dbus default to None at class level.)
         self._init_bme280(device_instance)
 
         self._update()

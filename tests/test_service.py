@@ -49,15 +49,15 @@ def _make_service(*, mounted_upside_down=False, fuses_installed=None):
         for fuse, installed in enumerate(flags):
             config['ftdi:FAKE001'][f'distributor{distributor}Fuse{fuse}Installed'] = str(installed)
 
+    # Skip __init__ — it touches dbus/vedbus. Optional attributes
+    # (_reinit_pending, _timer_id, _bme280_reader, _bme280_dbus) come
+    # from class-level defaults so the fixture only needs to set the
+    # ones it actively uses.
     svc = DbusLynxDistributorService.__new__(DbusLynxDistributorService)
     svc._ftdi = MagicMock()
     svc._ftdi.serial_number = 'FAKE001'
     svc._config = config
     svc._dbusservice = FakeDbusService()
-    svc._reinit_pending = False
-    svc._timer_id = None
-    svc._bme280_reader = None     # No BME280 in unit-test fixture
-    svc._bme280_dbus = None
 
     # Initial dbus paths the real __init__ would have created.
     for distributor in 'ABCD':
