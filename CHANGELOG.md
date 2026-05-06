@@ -26,6 +26,16 @@ Earlier history lives in the upstream repository's commit log.
     `disabled`, validates range, raises on unparseable input.
   - Helper `detect_bme280()` probes candidate addresses and returns an
     initialised reader or `None`.
+  - **`bme280TemperatureType` config option** (default `2` = generic). The
+    `/TemperatureType` D-Bus path determines whether the Cerbo's DVCC
+    treats the reading as a battery temperature (and applies
+    temperature-compensated charge-voltage adjustment) or as inert
+    monitoring data. Defaults to generic so cabin/bilge air doesn't end
+    up steering the charger; the README has a warning explaining why
+    `0 = battery` is dangerous unless the BME280 is physically bonded
+    to a battery cell.
+  - Invalid integers in this option fall back to the default with a
+    warning rather than crashing the service.
   - 22 new pytest cases (compensation against Bosch reference vectors,
     config parsing, detection logic via fake I²C controller) — all
     hardware-free.
@@ -35,7 +45,11 @@ Earlier history lives in the upstream repository's commit log.
     failure the sensor service is marked Disconnected and the next
     Lynx tick continues unaffected.
   - README: new section under "How this fork differs from upstream",
-    a wiring table, and `bme280` / `bme280Name` config keys.
+    a wiring table, all three `bme280*` config keys, and a "Visibility &
+    integration" subsection covering the Cerbo local GUI, VRM Portal,
+    MQTT-on-LAN bridging (the route to Home Assistant/Node-RED and the
+    only way the chip's `/Pressure` becomes consumer-side visible),
+    Cerbo Alarms, and NMEA2000 PGN bridging notes.
 - **`pyproject.toml`** (PEP 621) with full project metadata: name,
   version, description, authors, license, classifiers, deps, optional
   `dev` extras (pytest, flake8), URLs, and a `dbus-lynx-distributor`

@@ -152,6 +152,39 @@ Wiring on an Adafruit FT232H breakout:
 
 The driver auto-probes 0x76 then 0x77 by default; no config required if the sensor is present. When detected it registers a separate `com.victronenergy.temperature.<serial>_bme280` service so it shows up as a sensor tile in the Venus OS GUI.
 
+#### Visibility & integration
+
+Once the second VeDbusService is registered, the data flows through Venus OS's normal bridging layers — most channels need no extra work:
+
+| Channel | Status | What you get |
+|---|---|---|
+| **Cerbo local GUI** (touchscreen / web) | automatic | Sensor tile under *Settings → Devices* and *Settings → I/O → Temperature sensors*. Shows `/Temperature` and `/Humidity`. `/Pressure` is published on D-Bus but not rendered by the stock GUI. |
+| **VRM Portal** (cloud) | automatic, requires Cerbo online | Sensor appears under "Devices"; temperature and humidity get 30-day grafieken. Pressure is logged on the device side but not surfaced in the standard widgets — use the MQTT route below for a custom widget if you need it. |
+| **MQTT on LAN** | enable in *Settings → Services → MQTT on LAN* | Cerbo's broker exports **all** D-Bus paths under `N/<vrm-id>/temperature/<instance>/...`, including `/Pressure`. Subscribe from Home Assistant, Node-RED, InfluxDB — pressure trend (`d/dt > 3 hPa/3h`) is a useful storm-watch input on a boat. |
+| **Alarms** | manual | *Settings → Alarms* → pick the temperature service → set High/Low. Triggers via VRM and the Cerbo's piezo. Built-in alarms cover `/Temperature` only — humidity/pressure thresholds need Node-RED. |
+| **Node-RED-Victron** | optional, via Venus OS Large image | Visual flow editor reads/writes any D-Bus path. Good for compound triggers (dewpoint < 2 °C above cabin temperature → condensation alarm). |
+
+#### NMEA2000
+
+The Cerbo (with a CANbus-out cable) bridges D-Bus services onto NMEA2000 automatically:
+
+- **Temperature** → PGN 130316 (Temperature, Extended Range). Source mapping is driven by `/TemperatureType` (see warning below).
+- **Humidity / Pressure**: not bridged by stock Venus OS today. Two options when needed: a Node-RED-Victron flow that sends PGN 130311 (Environmental Parameters) via `socketcan`, or a SignalK plugin running alongside.
+
+The MQTT route is usually easier than fighting Venus OS's incomplete N2K bridging — and lets you re-publish to N2K via SignalK if your MFD integration matters.
+
+#### ⚠️ TemperatureType — DO NOT set this to 'battery' for a BME280
+
+The `/TemperatureType` D-Bus path is integer-encoded:
+
+| Value | Meaning | Effect on Cerbo |
+|---|---|---|
+| 0 | Battery | **DVCC uses this reading for temperature-compensated charge-voltage adjustment.** Charger output voltage is raised when cold and lowered when warm. Wrong reading here means wrong charge profile — overcharge or undercharge of the battery bank. |
+| 1 | Fridge | Used for fridge thermostat / monitoring widgets. |
+| 2 | Generic (default) | Inert: shown in the GUI / VRM, not consumed by any control loop. |
+
+A BME280 in the cabin or bilge measures *air* temperature, not battery cell temperature. **Using `bme280TemperatureType = 0` would feed cabin air temperature into the charger's compensation curve** — fine on a moored boat, dangerous in a sun-warmed cabin with a cool battery bank (charger thinks it's hot, drops the float voltage, undercharges) or vice versa. The driver defaults to `2` (generic) for this reason. Only override if the BME280 is *physically attached* to a battery as a thermal sensor.
+
 ## Software
 
 To be able to use I²C with the FT232H chip its MPSSE mode must be used. There are plenty of options to use this mode (FTDI's official drivers, libftdi, pyftdi), but all of them required custom drivers, ... to be compiled/installed on Venus OS which are not premade available.
@@ -175,8 +208,9 @@ Rename `config.sample.ini` and change to needs.
 If you wired a BME280 onto the same I²C bus, it is detected automatically. To override behaviour add to the `[ftdi:<serial>]` section:
 
 ```ini
-bme280 = auto         ; 'auto' (default), '0x76', '0x77', or 'disabled'
-bme280Name = Boot     ; optional CustomName shown in the GUI
+bme280 = auto                  ; 'auto' (default), '0x76', '0x77', or 'disabled'
+bme280Name = Boot              ; optional CustomName shown in the GUI
+bme280TemperatureType = 2      ; 0=battery, 1=fridge, 2=generic (default; see warning above)
 ```
 
-`disabled` skips probing entirely (no logged "not found" messages); explicit `0x76`/`0x77` only probes that one address.
+`disabled` skips probing entirely (no logged "not found" messages); explicit `0x76`/`0x77` only probes that one address. **Read the TemperatureType warning before setting `0`** — feeding cabin/bilge air into DVCC's battery-temperature compensation can mis-charge the bank.

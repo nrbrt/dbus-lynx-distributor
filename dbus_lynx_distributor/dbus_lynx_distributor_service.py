@@ -99,8 +99,14 @@ class DbusLynxDistributorService:
         appears as a sensor tile in the Venus OS GUI.
 
         Config (in the same [ftdi:<serial>] section as the Lynx options):
-          bme280 = auto         # 'auto' (default), '0x76', '0x77', or 'disabled'
-          bme280Name = ...      # optional CustomName, default 'BME280'
+          bme280 = auto                  # 'auto' (default), '0x76', '0x77', or 'disabled'
+          bme280Name = ...               # optional CustomName, default 'BME280'
+          bme280TemperatureType = 2      # 0=battery, 1=fridge, 2=generic (DEFAULT)
+                                         # ⚠️ NEVER use 0 unless this sensor really IS
+                                         # measuring a battery temperature — DVCC will
+                                         # apply temperature-compensated charge voltages
+                                         # based on this reading, which is unsafe if the
+                                         # value comes from cabin/bilge air instead.
         """
         bme280_address = self._config_get('bme280', 'auto')
         try:
@@ -132,7 +138,16 @@ class DbusLynxDistributorService:
         self._bme280_dbus.add_path('/HardwareVersion', '')
         self._bme280_dbus.add_path('/Connected', CONNECTED_TRUE)
         # Standard Victron temperature service paths.
-        self._bme280_dbus.add_path('/TemperatureType', 2)   # 2 = generic
+        # /TemperatureType: 0=battery, 1=fridge, 2=generic. Default 2 keeps
+        # this sensor *out of* DVCC's battery-temperature compensation logic;
+        # changing to 0 would actively redirect charge-voltage compensation
+        # to use this reading, which is wrong unless the BME280 is genuinely
+        # bonded to a battery cell.
+        temp_type = self._safe_int_config('bme280TemperatureType', 2)
+        if temp_type not in (0, 1, 2):
+            logging.warning(f"bme280TemperatureType={temp_type} out of range; using 2 (generic)")
+            temp_type = 2
+        self._bme280_dbus.add_path('/TemperatureType', temp_type)
         self._bme280_dbus.add_path('/Status', 0)            # 0 = OK
         self._bme280_dbus.add_path('/Temperature', None)
         self._bme280_dbus.add_path('/Humidity', None)
@@ -188,6 +203,15 @@ class DbusLynxDistributorService:
 
     def _config_getboolean(self, option: str, fallback: bool) -> bool:
         return self._config.getboolean(f'ftdi:{self._ftdi.serial_number}', option, fallback=fallback)
+
+    def _safe_int_config(self, option: str, fallback: int) -> int:
+        """ Return an int config value or the fallback on missing/invalid input. """
+        raw = self._config_get(option, str(fallback))
+        try:
+            return int(raw, 0)                  # honour 0x.. notation too
+        except (TypeError, ValueError):
+            logging.warning(f"Config {option}={raw!r} is not an int; using {fallback}")
+            return fallback
 
     def _fuse_index(self, fuse: int) -> int:
         """ Translate a 0..3 fuse number to the dbus path index, honouring
