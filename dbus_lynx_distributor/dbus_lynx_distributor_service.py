@@ -7,6 +7,7 @@ from vedbus import VeDbusService
 from dbus import SystemBus
 from usb.core import USBError
 
+from .bme280 import Bme280Reader, detect_bme280
 from .decoder import (
     ALARM_ACTIVE,
     ALARM_OK,
@@ -26,6 +27,15 @@ from .ftdi import NACK, Ftdi
 
 
 class DbusLynxDistributorService:
+    # Class-level defaults so test fixtures that build the service via
+    # `__new__()` (skipping __init__) don't have to seed every optional
+    # attribute themselves. __init__ overrides these with instance-level
+    # values; callers that bypass __init__ inherit safe Nones.
+    _reinit_pending: bool = False
+    _timer_id: Optional[int] = None
+    _bme280_reader: "Optional[Bme280Reader]" = None
+    _bme280_dbus: "Optional[VeDbusService]" = None
+
     def __init__(
         self,
         *,
@@ -40,8 +50,6 @@ class DbusLynxDistributorService:
 
         self._ftdi = ftdi
         self._config = config
-        self._reinit_pending: bool = False
-        self._timer_id: Optional[int] = None
 
         self._dbusservice = VeDbusService(servicename=service_name, bus=SystemBus(private=True), register=False)
 
@@ -77,8 +85,75 @@ class DbusLynxDistributorService:
         self._dbusservice.register()
         self._ftdi.init_i2c()
 
+        # Optional BME280 environmental sensor on the same I2C bus.
+        # Address conflict with Lynx (0x08-0x17) is impossible — BME280 lives at 0x76/0x77.
+        # (_bme280_reader and _bme280_dbus default to None at class level.)
+        self._init_bme280(device_instance)
+
         self._update()
         self._timer_id = GLib.timeout_add(POLL_INTERVAL_MS, self._update)
+
+    def _init_bme280(self, lynx_device_instance: int) -> None:
+        """ Probe for a BME280 on the shared I2C bus and, if found, register
+        a second VeDbusService under com.victronenergy.temperature.* so it
+        appears as a sensor tile in the Venus OS GUI.
+
+        Config (in the same [ftdi:<serial>] section as the Lynx options):
+          bme280 = auto                  # 'auto' (default), '0x76', '0x77', or 'disabled'
+          bme280Name = ...               # optional CustomName, default 'BME280'
+          bme280TemperatureType = 2      # 0=battery, 1=fridge, 2=generic (DEFAULT)
+                                         # ⚠️ NEVER use 0 unless this sensor really IS
+                                         # measuring a battery temperature — DVCC will
+                                         # apply temperature-compensated charge voltages
+                                         # based on this reading, which is unsafe if the
+                                         # value comes from cabin/bilge air instead.
+        """
+        bme280_address = self._config_get('bme280', 'auto')
+        try:
+            self._bme280_reader = detect_bme280(self._ftdi.i2c, bme280_address)
+        except Exception as e:                              # noqa: BLE001
+            logging.warning(f"BME280 detection failed: {e}")
+            self._bme280_reader = None
+            return
+        if self._bme280_reader is None:
+            return
+
+        from . import __version__
+
+        serial = self._ftdi.serial_number
+        service_name = f'com.victronenergy.temperature.{serial}_bme280'
+        # Offset by +100 to avoid colliding with the Lynx instance number.
+        sensor_instance = lynx_device_instance + 100
+
+        self._bme280_dbus = VeDbusService(servicename=service_name, bus=SystemBus(private=True), register=False)
+        self._bme280_dbus.add_path('/Mgmt/ProcessName', __name__)
+        self._bme280_dbus.add_path('/Mgmt/ProcessVersion', __version__)
+        self._bme280_dbus.add_path('/Mgmt/Connection', f'I2C 0x{self._bme280_reader.address:02x} via FT232H')
+        self._bme280_dbus.add_path('/ProductName', 'BME280')
+        self._bme280_dbus.add_path('/CustomName', self._config_get('bme280Name', 'BME280'))
+        self._bme280_dbus.add_path('/DeviceInstance', sensor_instance)
+        self._bme280_dbus.add_path('/ProductId', 0xFFFE)    # placeholder, no Victron PID for generic sensors
+        self._bme280_dbus.add_path('/Serial', f'{serial}_bme280')
+        self._bme280_dbus.add_path('/FirmwareVersion', '')
+        self._bme280_dbus.add_path('/HardwareVersion', '')
+        self._bme280_dbus.add_path('/Connected', CONNECTED_TRUE)
+        # Standard Victron temperature service paths.
+        # /TemperatureType: 0=battery, 1=fridge, 2=generic. Default 2 keeps
+        # this sensor *out of* DVCC's battery-temperature compensation logic;
+        # changing to 0 would actively redirect charge-voltage compensation
+        # to use this reading, which is wrong unless the BME280 is genuinely
+        # bonded to a battery cell.
+        temp_type = self._safe_int_config('bme280TemperatureType', 2)
+        if temp_type not in (0, 1, 2):
+            logging.warning(f"bme280TemperatureType={temp_type} out of range; using 2 (generic)")
+            temp_type = 2
+        self._bme280_dbus.add_path('/TemperatureType', temp_type)
+        self._bme280_dbus.add_path('/Status', 0)            # 0 = OK
+        self._bme280_dbus.add_path('/Temperature', None)
+        self._bme280_dbus.add_path('/Humidity', None)
+        self._bme280_dbus.add_path('/Pressure', None)
+        self._bme280_dbus.register()
+        logging.info(f"BME280 registered as {service_name} (address 0x{self._bme280_reader.address:02x})")
 
     def close(self) -> None:
         """ Release the I2C controller and cancel the poll timer.
@@ -90,16 +165,53 @@ class DbusLynxDistributorService:
         if self._timer_id is not None:
             GLib.source_remove(self._timer_id)
             self._timer_id = None
+        if self._bme280_dbus is not None:
+            try:
+                self._bme280_dbus['/Connected'] = CONNECTED_FALSE
+            except Exception:                              # noqa: BLE001
+                pass
+            self._bme280_dbus = None
         try:
             self._ftdi.close()
         except Exception as e:  # noqa: BLE001 — last-ditch cleanup
             logging.warning(f"Error closing Ftdi during shutdown: {e}")
+
+    def _poll_bme280(self) -> None:
+        """ Read the BME280 (if present) and publish to its D-Bus service.
+
+        Errors are logged but never fatal — the Lynx polling continues even
+        if the sensor disappears or returns garbage.
+        """
+        if self._bme280_reader is None or self._bme280_dbus is None:
+            return
+        try:
+            reading = self._bme280_reader.read()
+        except Exception as e:                              # noqa: BLE001
+            logging.warning(f"BME280 read failed: {e}")
+            self._bme280_dbus['/Connected'] = CONNECTED_FALSE
+            self._bme280_dbus['/Temperature'] = None
+            self._bme280_dbus['/Humidity'] = None
+            self._bme280_dbus['/Pressure'] = None
+            return
+        self._bme280_dbus['/Connected'] = CONNECTED_TRUE
+        self._bme280_dbus['/Temperature'] = round(reading.temperature_c, 2)
+        self._bme280_dbus['/Humidity'] = round(reading.humidity_percent, 1)
+        self._bme280_dbus['/Pressure'] = round(reading.pressure_hpa, 2)
 
     def _config_get(self, option: str, fallback):
         return self._config.get(f'ftdi:{self._ftdi.serial_number}', option, fallback=fallback)
 
     def _config_getboolean(self, option: str, fallback: bool) -> bool:
         return self._config.getboolean(f'ftdi:{self._ftdi.serial_number}', option, fallback=fallback)
+
+    def _safe_int_config(self, option: str, fallback: int) -> int:
+        """ Return an int config value or the fallback on missing/invalid input. """
+        raw = self._config_get(option, str(fallback))
+        try:
+            return int(raw, 0)                  # honour 0x.. notation too
+        except (TypeError, ValueError):
+            logging.warning(f"Config {option}={raw!r} is not an int; using {fallback}")
+            return fallback
 
     def _fuse_index(self, fuse: int) -> int:
         """ Translate a 0..3 fuse number to the dbus path index, honouring
@@ -191,4 +303,8 @@ class DbusLynxDistributorService:
         # Successful poll — make sure /Connected reflects reality even if
         # we recovered from a previous USBError.
         self._dbusservice['/Connected'] = CONNECTED_TRUE
+
+        # BME280 sensor on the same I2C bus (no-op if not detected).
+        self._poll_bme280()
+
         return True

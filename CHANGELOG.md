@@ -11,6 +11,45 @@ Earlier history lives in the upstream repository's commit log.
 
 ### Added
 
+- **Optional Bosch BME280 environmental sensor support** sharing the FT232H
+  I²C bus with the Lynx Distributors. Detects the sensor at 0x76 or 0x77
+  (configurable, auto-probe by default) and publishes a second
+  `com.victronenergy.temperature.<serial>_bme280` VeDbusService with
+  `/Temperature` (°C), `/Humidity` (%RH), and `/Pressure` (hPa) so it
+  appears as a sensor tile in the Venus OS GUI alongside the Lynx
+  Distributor service.
+  - New module `dbus_lynx_distributor/bme280.py` with pure compensation
+    maths (Bosch BST-BME280-DS002 §8.1: integer formula for humidity,
+    double for temperature/pressure) plus a thin `Bme280Reader` wrapper
+    around a pyftdi I²C port.
+  - Helper `parse_address_config()` accepts `auto` / `0x76` / `0x77` /
+    `disabled`, validates range, raises on unparseable input.
+  - Helper `detect_bme280()` probes candidate addresses and returns an
+    initialised reader or `None`.
+  - **`bme280TemperatureType` config option** (default `2` = generic). The
+    `/TemperatureType` D-Bus path determines whether the Cerbo's DVCC
+    treats the reading as a battery temperature (and applies
+    temperature-compensated charge-voltage adjustment) or as inert
+    monitoring data. Defaults to generic so cabin/bilge air doesn't end
+    up steering the charger; the README has a warning explaining why
+    `0 = battery` is dangerous unless the BME280 is physically bonded
+    to a battery cell.
+  - Invalid integers in this option fall back to the default with a
+    warning rather than crashing the service.
+  - 22 new pytest cases (compensation against Bosch reference vectors,
+    config parsing, detection logic via fake I²C controller) — all
+    hardware-free.
+  - DeviceInstance offset by +100 to avoid collision with the Lynx
+    instance number.
+  - Sensor errors are logged but never break Lynx polling; on read
+    failure the sensor service is marked Disconnected and the next
+    Lynx tick continues unaffected.
+  - README: new section under "How this fork differs from upstream",
+    a wiring table, all three `bme280*` config keys, and a "Visibility &
+    integration" subsection covering the Cerbo local GUI, VRM Portal,
+    MQTT-on-LAN bridging (the route to Home Assistant/Node-RED and the
+    only way the chip's `/Pressure` becomes consumer-side visible),
+    Cerbo Alarms, and NMEA2000 PGN bridging notes.
 - **`pyproject.toml`** (PEP 621) with full project metadata: name,
   version, description, authors, license, classifiers, deps, optional
   `dev` extras (pytest, flake8), URLs, and a `dbus-lynx-distributor`
@@ -35,7 +74,7 @@ Earlier history lives in the upstream repository's commit log.
 - `requirements-dev.txt` for dev/CI deps (pytest, flake8) — kept
   separate from `requirements.txt` so the Cerbo doesn't pull pytest at
   service startup.
-- **Pytest test suite** — 43 tests across four files:
+- **Pytest test suite** — 65 tests across five files:
   - `tests/test_decoder.py` — I2C status-byte decoding (per-fuse,
     all-blown, no-bus-power, uninstalled-fuse, property-style sweep
     across all 256 byte values × 16 install masks).
@@ -47,6 +86,13 @@ Earlier history lives in the upstream repository's commit log.
     upside-down fuse-index swap, `close()` semantics).
   - `tests/test_main.py` — SIGTERM/SIGINT handler, `_shutdown()`
     continuing after a service `close()` raises.
+  - `tests/test_bme280.py` — BME280 driver: compensation against Bosch
+    reference vectors (temperature, pressure, humidity), 0-100% clamp,
+    division-by-zero safety, calibration register parsing (incl. 12-bit
+    packed `dig_H4`/`dig_H5`), raw measurement parsing, address-config
+    parser, and `detect_bme280()` with a fake I²C controller covering
+    found-at-default, fall-through-to-alt, disabled, absent, and
+    explicit-pinned scenarios.
   - `tests/conftest.py` stubs `gi`, `vedbus`, `dbus`, and
     `settingsdevice` in `sys.modules` when those Cerbo-side libraries
     aren't installed locally, so the whole suite runs on any
