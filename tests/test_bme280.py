@@ -225,7 +225,7 @@ def test_parse_address_config_out_of_range():
 
 # ---- detect_bme280 ----
 
-from dbus_lynx_distributor.bme280 import BME280_CHIP_ID, detect_bme280
+from dbus_lynx_distributor.bme280 import detect_bme280
 
 
 class _FakePort:

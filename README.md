@@ -25,6 +25,15 @@ vid = 0xD4F8   # actually the Victron product ID
 
 This fork fixes both the field names *and* the corresponding variable assignment in `__main__.py`. The two upstream errors cancelled out, so unmodified upstream installs accidentally worked. **Configurations that were copied from upstream verbatim continue to work without changes** because the values stayed the same — only the names were corrected. Configurations that were intentionally written against the *meaning* of the field names (rare) need the `vid` and `pid` lines swapped.
 
+### Optional BME280 sensor on the same I²C bus
+
+A built-in driver for the Bosch BME280 (temperature / humidity / barometric pressure) that shares the FT232H I²C bus with the Lynx Distributors. The Lynx address range (0x08-0x17) does not collide with the BME280's 0x76/0x77, and `pyftdi`'s `I2cController` happily multiplexes both. When detected, the sensor registers as a *second* `VeDbusService` under `com.victronenergy.temperature.<serial>_bme280` so it appears as a sensor tile in the Venus OS GUI alongside the Lynx Distributor service.
+
+- Auto-probes 0x76 then 0x77 by default; configurable per FT232H via `bme280 = auto | 0x76 | 0x77 | disabled` in the existing `[ftdi:<serial>]` section.
+- Compensation logic ported from Bosch's BST-BME280-DS002 §8.1 reference (integer formula for humidity, double for temperature/pressure — Bosch's own double-precision humidity reference has a known divergence here).
+- Sensor errors never break Lynx polling; on read failure the sensor service is marked Disconnected and Lynx polling continues unaffected.
+- See "Optional: BME280 environmental sensor" further down for wiring + config details.
+
 ### Reliability fixes (the reason this fork exists)
 
 - **Transient USB errors no longer kill the service permanently.** Upstream's `_update()` returned `False` from its `except USBError` branch, which causes `GLib.timeout_add` to drop the poll timer for good. A single cable jiggle, EMI burst, or bus glitch would freeze the dbus values until the service was manually restarted. This fork invalidates the affected distributors as Communications Lost, sets a re-init flag, and recovers on the next tick by calling `Ftdi.init_i2c()` again.
@@ -35,7 +44,7 @@ This fork fixes both the field names *and* the corresponding variable assignment
 
 ### Quality improvements
 
-- **43-test pytest suite** (`tests/`) with mocked pyftdi I/O, including regression tests for both reliability bugs above and a property-style sweep across all 256 status-byte values. Runs in under 0.2 s on a Pi 5; doesn't require Cerbo libraries thanks to `tests/conftest.py` stubs.
+- **65-test pytest suite** (`tests/`) with mocked pyftdi I/O, including regression tests for both reliability bugs above, a property-style sweep across all 256 status-byte values, and a hardware-free BME280 driver suite (Bosch reference vectors + fake I²C controller for detection logic). Runs in under 0.2 s on a Pi 5; doesn't require Cerbo libraries thanks to `tests/conftest.py` stubs.
 - **GitHub Actions CI** (`.github/workflows/test.yml`) running flake8 + pytest on Python 3.11 and 3.12 for every push and PR.
 - **Pinned dependencies** (`requirements.txt`: `pyftdi~=0.57.1`, `pyusb~=1.3.1`). The upstream service script ran `pip install pyftdi` with no version constraint, so a breaking upstream release would have crashed the service silently at next reboot.
 - **Pure decoder module** (`dbus_lynx_distributor/decoder.py`) — bit-decoding logic extracted from the dbus-publishing layer for testability and clarity. The 4-level-nested if/else from upstream is gone.
